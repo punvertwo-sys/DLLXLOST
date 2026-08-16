@@ -87,7 +87,7 @@ function Invoke-InstallDll {
         }
         
         Rename-Item -Path $tempFile -NewName $global:DllName
-        Write-Host "[+] Installed & renamed to '$global:DllName'!" -ForegroundColor Green
+        Write-Host "[+] Installed " -ForegroundColor Green
     }
     catch {
         Write-Host "[-] Download failed: $_" -ForegroundColor Red
